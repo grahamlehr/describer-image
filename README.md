@@ -72,7 +72,7 @@ must match how the OS applies them on first boot. It is copied from Raspberry Pi
 Lite (64-bit)" entry in `https://downloads.raspberrypi.com/os_list_imagingutility_v4.json`, not chosen
 by hand.
 
-## Using it (Raspberry Pi Imager)
+## Using it (Raspberry Pi Imager 2.x)
 
 Add the repository under **App Options → Content repository**:
 
@@ -82,13 +82,34 @@ https://raw.githubusercontent.com/grahamlehr/describer-image/main/os_list.json
 
 then choose **Raspberry Pi 4** and **Describer**. **Always set the Wi-Fi, username and password in
 Imager's settings.** The image keeps pi-gen's defaults for the first user (as the official Lite image
-does) and relies on Imager to configure it; without those settings the first-boot login prompt appears
-on the console the kiosk then takes over. This is the assumption Gate G5 tests.
+does) and relies on Imager to configure it through cloud-init.
+
+**Do not pick the image with "Use custom".** Imager 2.x cannot know how a file it has been handed
+wants to be customised, so it assumes `init_format: none` and offers no Wi-Fi or user settings
+(Raspberry Pi documents this in `doc/os_customisation_formats.md` in rpi-imager). What you get is
+what a first boot with no settings does: a console dialog, **"Please enter new username:"**, and no
+network but Ethernet. That is what the first G5 attempt showed.
+
+### Testing a build before it is published
+
+Give Imager a local manifest for the image, which carries the `init_format`. Download the
+`describer-image` artifact from a run of **Build image**, unzip it, then:
+
+```bash
+python3 scripts/os_list.py local /path/to/image_2026-..-..-describer.img.xz
+```
+
+That writes `os_list_local.rpi-imager-manifest` next to the image (the same entry a Release gets, with a
+`file://` URL). Double-click it to open it in Imager, or use **App Options → Content Repository → EDIT
+→ Use custom file**, choose the manifest and **APPLY & RESTART**. The OS page then lists Describer and
+the settings step appears. (Imager's own `create_local_json.py` only matches Raspberry Pi's official
+image filenames, so it cannot be used for this image.)
 
 ## Checking things without a full build
 
 ```bash
 python3 -m unittest discover -s tests -v     # the helper and the stage scripts' static checks
+python3 scripts/os_list.py local IMAGE.img.xz  # a local Imager manifest for an unpublished build
 scripts/try-stage-in-docker.sh               # the stage, for real, in Trixie arm64 (needs Docker)
 TWICE=1 scripts/try-stage-in-docker.sh       # ...and again over the install: nothing is clobbered
 ```

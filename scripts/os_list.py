@@ -10,6 +10,9 @@ Standard library only: it runs on a bare CI runner.
         rewrite os_list.json with this one image
     os_list.py check-init-format --codename trixie --expect cloudinit-rpi [--official FILE]
         fail unless Raspberry Pi's own Lite (64-bit) entry for that release says the same
+    os_list.py local IMAGE.img.xz [--output FILE] [--init-format F]
+        write a local Imager manifest for an image on disk, so Imager 2.x offers its
+        Wi-Fi/user settings for it (a file chosen with "Use custom" gets none)
 """
 
 from __future__ import annotations
@@ -20,8 +23,14 @@ import json
 import lzma
 import sys
 import urllib.request
+from datetime import date
 from pathlib import Path
 
+#: What Imager opens by double-click, and accepts as a content repository.
+LOCAL_MANIFEST = "os_list_local.rpi-imager-manifest"
+#: Kept in step with INIT_FORMAT in .github/workflows/build.yml (the workflow
+#: verifies that one against Raspberry Pi's own list).
+DEFAULT_INIT_FORMAT = "cloudinit-rpi"
 OFFICIAL_URL = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json"
 
 NAME = "Describer (Raspberry Pi OS Lite, 64-bit)"
@@ -77,6 +86,26 @@ def write_os_list(path: Path, entry: dict[str, object]) -> None:
     path.write_text(json.dumps({"os_list": [entry]}, indent=2) + "\n", encoding="utf-8")
 
 
+def local_manifest(image: Path, init_format: str = DEFAULT_INIT_FORMAT) -> dict[str, list]:
+    """A manifest for an image on disk: the same entry a Release gets, with a file: URL.
+
+    Imager 2.x assumes ``init_format: none`` for an image picked with "Use custom",
+    because nothing tells it how the OS wants to be customised, and offers no
+    Wi-Fi/user settings. A manifest carries that metadata.
+    """
+    image = image.resolve()
+    if not image.is_file():
+        raise FileNotFoundError(image)
+    measured = measure(image)
+    entry = build_entry(
+        url=image.as_uri(),
+        release_date=date.today().isoformat(),
+        init_format=init_format,
+        **measured,  # type: ignore[arg-type]
+    )
+    return {"os_list": [entry]}
+
+
 def official_init_format(official: dict, codename: str) -> str:
     """The init_format of Raspberry Pi's own Lite (64-bit) entry for ``codename``."""
 
@@ -116,6 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--image-download-size", type=int, required=True)
     p.add_argument("--init-format", required=True)
 
+    p = sub.add_parser("local")
+    p.add_argument("image", type=Path)
+    p.add_argument("--output", type=Path)
+    p.add_argument("--init-format", default=DEFAULT_INIT_FORMAT)
+
     p = sub.add_parser("check-init-format")
     p.add_argument("--codename", required=True)
     p.add_argument("--expect", required=True)
@@ -136,6 +170,17 @@ def main(argv: list[str] | None = None) -> int:
             init_format=args.init_format,
         )
         write_os_list(args.file, entry)
+        return 0
+
+    if args.command == "local":
+        try:
+            manifest = local_manifest(args.image, args.init_format)
+        except FileNotFoundError as exc:
+            print(f"no such image: {exc}", file=sys.stderr)
+            return 1
+        output = args.output or args.image.resolve().parent / LOCAL_MANIFEST
+        output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {output}")
         return 0
 
     found = official_init_format(_load_official(args.official), args.codename)
