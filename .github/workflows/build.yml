@@ -1,0 +1,208 @@
+name: Build image
+
+# Builds the Describer Raspberry Pi image with pi-gen, on GitHub's free arm64
+# runners (public repo), and publishes it as a Release plus an Imager
+# repository entry (os_list.json).
+#
+# A manual run builds and attaches the image to the run as an artifact and
+# publishes nothing, unless "publish" is ticked. The monthly run always
+# publishes, so images carry recent Raspberry Pi OS fixes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      describer_ref:
+        description: "Commit or branch of grahamlehr/describer to bake in (must be on main)"
+        default: main
+      publish:
+        description: "Publish a Release and update os_list.json (otherwise just build)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 4 1 * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-image
+  cancel-in-progress: false
+
+env:
+  # These three move together. PIGEN_TAG names a Raspberry Pi OS release
+  # (pi-gen tags are <date>-raspios-<release>-<arch>); RELEASE_CODENAME is that
+  # release; INIT_FORMAT is what Raspberry Pi's own Lite (64-bit) entry for it
+  # says, which the "Check init_format" step verifies against the live list.
+  PIGEN_REPO: RPi-Distro/pi-gen
+  PIGEN_TAG: 2026-09-15-raspios-trixie-arm64
+  RELEASE_CODENAME: trixie
+  INIT_FORMAT: cloudinit-rpi
+  DESCRIBER_URL: https://github.com/grahamlehr/describer.git
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: shellcheck
+        run: shellcheck stage-describer/prerun.sh stage-describer/00-describer/00-run-chroot.sh
+
+  build:
+    needs: checks
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publishing needs main
+        if: env.PUBLISH == 'true' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Publish only from main: this run is on ${{ github.ref }}, and os_list.json is committed to main."
+          exit 1
+
+      - name: Resolve the describer commit
+        id: describer
+        env:
+          REF: ${{ inputs.describer_ref || 'main' }}
+        run: |
+          git clone --quiet "$DESCRIBER_URL" "$RUNNER_TEMP/describer"
+          cd "$RUNNER_TEMP/describer"
+          # A branch is looked up on origin; a commit or tag as it stands.
+          sha="$(git rev-parse --verify --quiet "origin/$REF^{commit}" || git rev-parse --verify "$REF^{commit}")"
+          # The updater fast-forwards from origin/main, so the image must be on it.
+          git merge-base --is-ancestor "$sha" origin/main \
+            || { echo "::error::$sha is not on main of $DESCRIBER_URL"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:7}" >> "$GITHUB_OUTPUT"
+          echo "Baking in describer $sha"
+
+      - name: Check init_format against Raspberry Pi's own list
+        run: python3 scripts/os_list.py check-init-format --codename "$RELEASE_CODENAME" --expect "$INIT_FORMAT"
+
+      - name: Get pi-gen at the pinned tag
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PIGEN_REPO }}
+          ref: ${{ env.PIGEN_TAG }}
+          path: pi-gen
+
+      - name: Add our stage and config to pi-gen
+        env:
+          DESCRIBER_SHA: ${{ steps.describer.outputs.sha }}
+        run: |
+          cp -R stage-describer pi-gen/stage-describer
+          # stage2 carries pi-gen's own EXPORT_IMAGE (the Lite image); switch it
+          # off so the only image is ours.
+          touch pi-gen/stage2/SKIP_IMAGES
+          cp config pi-gen/config
+          # build.sh exports its own variables, not ours.
+          echo "export DESCRIBER_REF=$DESCRIBER_SHA" >> pi-gen/config
+
+      - name: Make room
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h /
+
+      # pi-gen's own build-docker.sh, not a wrapper action: it builds natively on
+      # aarch64 (it skips binfmt/qemu there), it is pinned to exactly the tag above
+      # with nothing else to keep in step, and there is no third-party action to
+      # trust with a repo that has write access to Releases.
+      - name: Build the image
+        working-directory: pi-gen
+        run: ./build-docker.sh
+
+      - name: Package
+        id: image
+        run: |
+          shopt -s nullglob
+          files=(pi-gen/deploy/image_*-describer.img.xz)
+          [ "${#files[@]}" -eq 1 ] || { echo "::error::expected one image, found: ${files[*]:-none}"; ls -la pi-gen/deploy; exit 1; }
+          mkdir -p out
+          cp "${files[0]}" out/
+          name="$(basename "${files[0]}")"
+          (cd out && sha256sum "$name" > "$name.sha256")
+          cp pi-gen/deploy/build.log out/ 2>/dev/null || true
+          python3 scripts/os_list.py measure "out/$name" > out/measure.json
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          cat out/measure.json
+          ls -la out
+
+      - name: Keep the image (build-only runs)
+        if: env.PUBLISH != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: describer-image
+          path: |
+            out/*.img.xz
+            out/*.sha256
+            out/measure.json
+            out/build.log
+          retention-days: 7
+          compression-level: 0
+
+      - name: Keep the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            pi-gen/deploy/build.log
+            pi-gen/deploy/build-docker.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish the Release
+        id: release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.image.outputs.name }}
+          DESCRIBER_SHA: ${{ steps.describer.outputs.sha }}
+        run: |
+          day="$(date -u +%Y.%m.%d)"
+          tag="image-$day"
+          n=2
+          while gh release view "$tag" >/dev/null 2>&1; do
+            tag="image-$day-$n"
+            n=$((n + 1))
+          done
+          {
+            echo "Describer image built on Raspberry Pi OS ${RELEASE_CODENAME^} Lite (64-bit) for the Raspberry Pi 4."
+            echo
+            echo "- describer: [\`${DESCRIBER_SHA:0:7}\`](${DESCRIBER_URL%.git}/commit/$DESCRIBER_SHA)"
+            echo "- pi-gen: \`$PIGEN_TAG\`"
+            echo "- sha256 of the .img.xz: \`$(cut -d' ' -f1 "out/$NAME.sha256")\`"
+            echo
+            echo "Use it from Raspberry Pi Imager through the custom repository:"
+            echo "\`https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/os_list.json\`"
+          } > notes.md
+          gh release create "$tag" "out/$NAME" "out/$NAME.sha256" \
+            --title "Describer image $day" --notes-file notes.md
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Update os_list.json
+        if: env.PUBLISH == 'true'
+        env:
+          NAME: ${{ steps.image.outputs.name }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          size="$(python3 -c 'import json;print(json.load(open("out/measure.json"))["extract_size"])')"
+          sha="$(python3 -c 'import json;print(json.load(open("out/measure.json"))["extract_sha256"])')"
+          dl="$(python3 -c 'import json;print(json.load(open("out/measure.json"))["image_download_size"])')"
+          python3 scripts/os_list.py update \
+            --file os_list.json \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/$NAME" \
+            --release-date "$(date -u +%Y-%m-%d)" \
+            --extract-size "$size" --extract-sha256 "$sha" \
+            --image-download-size "$dl" --init-format "$INIT_FORMAT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add os_list.json
+          git commit -m "Image $TAG: describer ${{ steps.describer.outputs.short }} on Raspberry Pi OS $RELEASE_CODENAME"
+          git pull --rebase --quiet origin main
+          git push origin HEAD:main
