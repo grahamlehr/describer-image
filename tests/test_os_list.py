@@ -121,6 +121,31 @@ class OsListTests(unittest.TestCase):
             self.assertEqual(os_list.main([*args, "--expect", "cloudinit-rpi"]), 0)
             self.assertEqual(os_list.main([*args, "--expect", "systemd"]), 1)
 
+    def test_a_local_manifest_points_at_the_file_and_carries_init_format(self):
+        data = b"describer" * 50_000
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "image_2026-09-19-describer.img.xz"
+            image.write_bytes(lzma.compress(data))
+
+            code = os_list.main(["local", str(image)])
+
+            manifest = Path(tmp) / "os_list_local.rpi-imager-manifest"
+            entry = json.loads(manifest.read_text())["os_list"][0]
+            self.assertEqual(code, 0)
+            self.assertEqual(entry["url"], image.resolve().as_uri())
+            self.assertTrue(entry["url"].startswith("file:///"))
+            self.assertEqual(entry["init_format"], "cloudinit-rpi")
+            self.assertEqual(entry["extract_size"], len(data))
+            self.assertEqual(entry["extract_sha256"], hashlib.sha256(data).hexdigest())
+            self.assertEqual(entry["devices"], ["pi4-64bit"])
+
+    def test_a_missing_image_is_an_error_not_a_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = os_list.main(["local", str(Path(tmp) / "nope.img.xz")])
+
+            self.assertEqual(code, 1)
+            self.assertFalse((Path(tmp) / "os_list_local.rpi-imager-manifest").exists())
+
     def test_the_committed_os_list_is_valid(self):
         data = json.loads((ROOT / "os_list.json").read_text())
         self.assertIsInstance(data["os_list"], list)
