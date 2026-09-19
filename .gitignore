@@ -1,0 +1,11 @@
+# pi-gen is checked out here by the workflow; images are never committed.
+pi-gen/
+out/
+work/
+deploy/
+notes.md
+*.img
+*.img.xz
+*.zip
+.env
+__pycache__/

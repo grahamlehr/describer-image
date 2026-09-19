@@ -1,0 +1,28 @@
+# pi-gen config for the Describer image. build.sh sources this file, so it is
+# shell. Variable names are the ones in pi-gen's README at the pinned tag (see
+# PIGEN_TAG in .github/workflows/build.yml); do not assume any other spelling.
+#
+# The workflow appends `export DESCRIBER_REF=<commit>` for the build. It is not
+# set here, and must be exported (build.sh exports its own variables, not ours).
+
+IMG_NAME=describer
+TARGET_HOSTNAME=describer
+LOCALE_DEFAULT=en_GB.UTF-8
+KEYBOARD_KEYMAP=gb
+KEYBOARD_LAYOUT="English (UK)"
+TIMEZONE_DEFAULT=Europe/London
+WPA_COUNTRY=GB
+ENABLE_SSH=0
+
+# Lite, plus our stage. stage2 also carries an EXPORT_IMAGE, which the workflow
+# turns off with a SKIP_IMAGES file, so the only image is ours.
+STAGE_LIST="stage0 stage1 stage2 stage-describer"
+
+# One xz file, which is what Raspberry Pi Imager expects of a custom image.
+DEPLOY_COMPRESSION=xz
+
+# The first user is left to Imager and first boot, as in the official Lite image
+# (pi-gen defaults: FIRST_USER_NAME=pi, no FIRST_USER_PASS, first-boot rename on,
+# ENABLE_CLOUD_INIT=1 so Imager's Wi-Fi, user and hostname settings are applied).
+# Setting any of those here would ship a default login, and pi-gen refuses
+# DISABLE_FIRST_BOOT_USER_RENAME=1 without a password anyway.
