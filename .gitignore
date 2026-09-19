@@ -9,3 +9,6 @@ notes.md
 *.zip
 .env
 __pycache__/
+
+# Downloaded Actions logs.
+GH_Actions_Log
