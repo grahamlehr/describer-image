@@ -43,7 +43,7 @@ jobs:
   checks:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Unit tests
         run: python3 -m unittest discover -s tests -v
       - name: shellcheck
@@ -56,7 +56,7 @@ jobs:
     env:
       PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Publishing needs main
         if: env.PUBLISH == 'true' && github.ref != 'refs/heads/main'
@@ -84,7 +84,7 @@ jobs:
         run: python3 scripts/os_list.py check-init-format --codename "$RELEASE_CODENAME" --expect "$INIT_FORMAT"
 
       - name: Get pi-gen at the pinned tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.PIGEN_REPO }}
           ref: ${{ env.PIGEN_TAG }}
@@ -134,7 +134,7 @@ jobs:
 
       - name: Keep the image (build-only runs)
         if: env.PUBLISH != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: describer-image
           path: |
@@ -147,7 +147,7 @@ jobs:
 
       - name: Keep the build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-log
           path: |
