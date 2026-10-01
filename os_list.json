@@ -1,1 +1,18 @@
-{"os_list": []}
+{
+  "os_list": [
+    {
+      "name": "Describer (Raspberry Pi OS Lite, 64-bit)",
+      "description": "A live UK rail departure board for a Raspberry Pi 4 and a TV, on Raspberry Pi OS Lite. Set your Wi-Fi in the settings, write the card, and scan the QR code on the screen.",
+      "url": "https://github.com/grahamlehr/describer-image/releases/download/image-2026.10.01/image_2026-10-01-describer.img.xz",
+      "extract_size": 4294967296,
+      "extract_sha256": "18784aeda6bbeac6df6ed68d3e6699c1a4cddcc078df7fe3b285582398ef7c9e",
+      "image_download_size": 946824800,
+      "release_date": "2026-10-01",
+      "init_format": "cloudinit-rpi",
+      "devices": [
+        "pi4-64bit"
+      ],
+      "capabilities": []
+    }
+  ]
+}
