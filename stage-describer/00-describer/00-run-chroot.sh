@@ -76,15 +76,19 @@ for unit in describer kiosk shutdown-button; do
   [ -e "/etc/systemd/system/$unit.service" ] || fail "$unit.service is not installed"
 done
 [ -e /etc/systemd/system/multi-user.target.wants/describer.service ] || fail "describer is not enabled"
-# The kiosk hangs off multi-user.target, not graphical.target, and tty1's login
-# prompt is masked: Raspberry Pi OS's first-boot user setup (cancel-rename)
-# resets the default target to multi-user and starts getty@tty1, which used to
-# leave the TV on a login prompt (describer's docs/traps.md). These checks see
-# only what install.sh wrote; first boot itself can only be proved on a card.
+# The kiosk hangs off multi-user.target, not graphical.target, and a drop-in
+# makes tty1's login prompt a no-op: Raspberry Pi OS's first-boot user setup
+# (cancel-rename) resets the default target to multi-user, then enables and
+# starts getty@tty1. That used to leave the TV on a login prompt; masking the
+# getty instead made cancel-rename fail, and the Pi asked for a username for
+# ever (describer's docs/traps.md). These checks see only what install.sh
+# wrote; first boot itself can only be proved on a card.
 [ -e /etc/systemd/system/multi-user.target.wants/kiosk.service ] || fail "kiosk is not enabled"
 [ ! -e /etc/systemd/system/graphical.target.wants/kiosk.service ] \
   || fail "kiosk still depends on graphical.target"
-[ "$(readlink /etc/systemd/system/getty@tty1.service)" = /dev/null ] || fail "getty@tty1 is not masked"
+[ ! -L /etc/systemd/system/getty@tty1.service ] || fail "getty@tty1 is masked, which breaks first-boot user setup"
+[ -f /etc/systemd/system/getty@tty1.service.d/10-describer-kiosk.conf ] \
+  || fail "the getty@tty1 drop-in is not installed"
 [ -x /usr/local/sbin/describer-apply-deploy ] || fail "describer-apply-deploy is not installed"
 [ -f /etc/polkit-1/rules.d/50-describer.rules ] || fail "the polkit rules are not installed"
 
