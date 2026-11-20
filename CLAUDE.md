@@ -14,5 +14,6 @@ Never commit an image, a key or a token.
   `origin/main` and fails the build if the checkout is not exactly what the updater needs.
 - Publish only from `main`. Never put a key in the image.
 - The stage's checks see the image as built, not first boot. Pi OS's first-boot user setup resets the
-  default target and starts `getty@tty1`; the kiosk is on `multi-user.target` with that getty masked for
-  that reason. A change to first-boot behaviour is only proved by flashing a card.
+  default target, then enables and starts `getty@tty1`; the kiosk is on `multi-user.target` with a drop-in
+  that makes that getty a no-op for that reason. Never mask it: the user setup then fails and loops.
+  A change to first-boot behaviour is only proved by flashing a card.
