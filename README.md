@@ -32,7 +32,7 @@ stage-describer/
     00-run-chroot.sh         the whole stage
 scripts/os_list.py           measures the image, writes os_list.json, checks init_format
 scripts/try-stage-in-docker.sh   run the stage in a Trixie arm64 container (minutes, not an hour)
-os_list.json                 the Imager repository, rewritten by the workflow
+os_list.json                 the old Imager repository file; Imager now reads the one on the `imager` branch
 tests/                       stdlib unittest, no dependencies
 .github/workflows/build.yml  the build
 ```
@@ -50,7 +50,14 @@ public). Run it from the Actions tab:
 A monthly run (the 1st) always publishes, so images carry recent Raspberry Pi OS fixes.
 
 Publishing makes a Release `image-YYYY.MM.DD` (`-2`, `-3` on the same day) with the `.img.xz` and a
-`.sha256`, and commits `os_list.json` to `main`. It refuses to publish from any other branch.
+`.sha256`, and commits `os_list.json` to the **`imager` branch**. It refuses to publish from any branch
+but `main`.
+
+**Why a separate branch.** `main` is protected (changes only by pull request), so the workflow cannot
+commit to it: the November 2026 run made its Release and then failed at the push, leaving Imager on the
+October image. The `imager` branch holds nothing but `os_list.json`, shares no history with `main`, and
+must stay unprotected. The workflow creates it on the first publish. The `os_list.json` on `main` is the
+old location, kept so the old URL still answers; nothing updates it.
 
 **Why pi-gen's own `build-docker.sh` and not `usimd/pi-gen-action`.** On an arm64 runner
 `build-docker.sh` builds natively (it skips binfmt/qemu on aarch64), it is pinned to exactly the same
@@ -145,7 +152,7 @@ departure board" screen with its QR code, still there after a reboot.
 Add the repository under **App Options → Content repository**:
 
 ```
-https://raw.githubusercontent.com/grahamlehr/describer-image/main/os_list.json
+https://raw.githubusercontent.com/grahamlehr/describer-image/imager/os_list.json
 ```
 
 then choose **Raspberry Pi 4** and **Describer**. **Always set the Wi-Fi, username and password in

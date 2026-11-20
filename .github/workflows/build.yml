@@ -2,7 +2,7 @@ name: Build image
 
 # Builds the Describer Raspberry Pi image with pi-gen, on GitHub's free arm64
 # runners (public repo), and publishes it as a Release plus an Imager
-# repository entry (os_list.json).
+# repository entry (os_list.json on the `imager` branch).
 #
 # A manual run builds and attaches the image to the run as an artifact and
 # publishes nothing, unless "publish" is ticked. The monthly run always
@@ -38,6 +38,10 @@ env:
   RELEASE_CODENAME: trixie
   INIT_FORMAT: cloudinit-rpi
   DESCRIBER_URL: https://github.com/grahamlehr/describer.git
+  # Where Imager reads os_list.json from. `main` is protected (changes only by
+  # pull request), so the workflow cannot commit there; this branch holds
+  # nothing but os_list.json and must stay unprotected.
+  IMAGER_BRANCH: imager
 
 jobs:
   checks:
@@ -61,7 +65,7 @@ jobs:
       - name: Publishing needs main
         if: env.PUBLISH == 'true' && github.ref != 'refs/heads/main'
         run: |
-          echo "::error::Publish only from main: this run is on ${{ github.ref }}, and os_list.json is committed to main."
+          echo "::error::Publish only from main: this run is on ${{ github.ref }}, and a published image must be built from main's stage and config."
           exit 1
 
       - name: Resolve the describer commit
@@ -179,13 +183,15 @@ jobs:
             echo "- sha256 of the .img.xz: \`$(cut -d' ' -f1 "out/$NAME.sha256")\`"
             echo
             echo "Use it from Raspberry Pi Imager through the custom repository:"
-            echo "\`https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/os_list.json\`"
+            echo "\`https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${IMAGER_BRANCH}/os_list.json\`"
           } > notes.md
           gh release create "$tag" "out/$NAME" "out/$NAME.sha256" \
             --title "Describer image $day" --notes-file notes.md
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Update os_list.json
+      # Last, so a failure here leaves a Release nobody is pointed at, never a
+      # list entry without its image.
+      - name: Update os_list.json on the imager branch
         if: env.PUBLISH == 'true'
         env:
           NAME: ${{ steps.image.outputs.name }}
@@ -194,15 +200,30 @@ jobs:
           size="$(python3 -c 'import json;print(json.load(open("out/measure.json"))["extract_size"])')"
           sha="$(python3 -c 'import json;print(json.load(open("out/measure.json"))["extract_sha256"])')"
           dl="$(python3 -c 'import json;print(json.load(open("out/measure.json"))["image_download_size"])')"
+
           python3 scripts/os_list.py update \
-            --file os_list.json \
+            --file "$RUNNER_TEMP/os_list.json" \
             --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/$NAME" \
             --release-date "$(date -u +%Y-%m-%d)" \
             --extract-size "$size" --extract-sha256 "$sha" \
             --image-download-size "$dl" --init-format "$INIT_FORMAT"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add os_list.json
-          git commit -m "Image $TAG: describer ${{ steps.describer.outputs.short }} on Raspberry Pi OS $RELEASE_CODENAME"
-          git pull --rebase --quiet origin main
-          git push origin HEAD:main
+
+          # main is protected, so the list is committed to its own branch. The
+          # commit is built without checking that branch out: one file, one
+          # tree, pushed from this checkout with the token it already has.
+          blob="$(git hash-object -w "$RUNNER_TEMP/os_list.json")"
+          tree="$(printf '100644 blob %s\tos_list.json\n' "$blob" | git mktree)"
+          parent=()
+          if git fetch --quiet --depth 1 origin "$IMAGER_BRANCH"; then
+            parent=(-p "$(git rev-parse FETCH_HEAD)")
+          fi
+          # No parent means the first publish: the branch starts here, sharing
+          # no history with main. If the fetch failed for any other reason the
+          # push below is rejected as a non-fast-forward, which is the safe way
+          # to fail.
+          commit="$(git \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit-tree "$tree" "${parent[@]}" \
+            -m "Image $TAG: describer ${{ steps.describer.outputs.short }} on Raspberry Pi OS $RELEASE_CODENAME")"
+          git push origin "$commit:refs/heads/$IMAGER_BRANCH"

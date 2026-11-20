@@ -151,6 +151,22 @@ class OsListTests(unittest.TestCase):
         self.assertIsInstance(data["os_list"], list)
 
 
+class WorkflowTests(unittest.TestCase):
+    def test_the_workflow_never_pushes_to_main(self):
+        """main is protected: a push there fails after the Release is already made."""
+        text = (ROOT / ".github" / "workflows" / "build.yml").read_text()
+        pushes = [line.strip() for line in text.splitlines() if "git push" in line]
+        self.assertEqual(pushes, ['git push origin "$commit:refs/heads/$IMAGER_BRANCH"'])
+        self.assertIn("IMAGER_BRANCH: imager", text)
+
+    def test_the_readme_gives_the_url_the_workflow_publishes_to(self):
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn(
+            "https://raw.githubusercontent.com/grahamlehr/describer-image/imager/os_list.json",
+            readme,
+        )
+
+
 class ScriptTests(unittest.TestCase):
     def test_shell_scripts_parse(self):
         for path in (

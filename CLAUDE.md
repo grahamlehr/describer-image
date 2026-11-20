@@ -13,6 +13,8 @@ Never commit an image, a key or a token.
 - install.sh leaves `/opt/describer` on a detached HEAD; the stage puts it on `main` tracking
   `origin/main` and fails the build if the checkout is not exactly what the updater needs.
 - Publish only from `main`. Never put a key in the image.
+- `main` is protected, so the workflow must never push to it. `os_list.json` is published to the
+  unprotected `imager` branch (`IMAGER_BRANCH` in `build.yml`), which is what Imager reads.
 - The stage's checks see the image as built, not first boot. Pi OS's first-boot user setup resets the
   default target, then enables and starts `getty@tty1`; the kiosk is on `multi-user.target` with a drop-in
   that makes that getty a no-op for that reason. Never mask it: the user setup then fails and loops.
