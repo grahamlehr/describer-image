@@ -32,7 +32,7 @@ stage-describer/
     00-run-chroot.sh         the whole stage
 scripts/os_list.py           measures the image, writes os_list.json, checks init_format
 scripts/try-stage-in-docker.sh   run the stage in a Trixie arm64 container (minutes, not an hour)
-os_list.json                 the Imager repository, rewritten by the workflow
+os_list.json                 the old Imager repository file; Imager now reads the one on the `imager` branch
 tests/                       stdlib unittest, no dependencies
 .github/workflows/build.yml  the build
 ```
@@ -50,7 +50,14 @@ public). Run it from the Actions tab:
 A monthly run (the 1st) always publishes, so images carry recent Raspberry Pi OS fixes.
 
 Publishing makes a Release `image-YYYY.MM.DD` (`-2`, `-3` on the same day) with the `.img.xz` and a
-`.sha256`, and commits `os_list.json` to `main`. It refuses to publish from any other branch.
+`.sha256`, and commits `os_list.json` to the **`imager` branch**. It refuses to publish from any branch
+but `main`.
+
+**Why a separate branch.** `main` is protected (changes only by pull request), so the workflow cannot
+commit to it: the November 2026 run made its Release and then failed at the push, leaving Imager on the
+October image. The `imager` branch holds nothing but `os_list.json`, shares no history with `main`, and
+must stay unprotected. The workflow creates it on the first publish. The `os_list.json` on `main` is the
+old location, kept so the old URL still answers; nothing updates it.
 
 **Why pi-gen's own `build-docker.sh` and not `usimd/pi-gen-action`.** On an arm64 runner
 `build-docker.sh` builds natively (it skips binfmt/qemu on aarch64), it is pinned to exactly the same
@@ -72,17 +79,86 @@ must match how the OS applies them on first boot. It is copied from Raspberry Pi
 Lite (64-bit)" entry in `https://downloads.raspberrypi.com/os_list_imagingutility_v4.json`, not chosen
 by hand.
 
+## Building locally
+
+The same steps as the workflow, by hand, on an arm64 machine with Docker (an Apple Silicon Mac builds
+natively, in about 15 minutes). Use this to try a change on a card before anything is published.
+`build.yml` is the source of truth: if it and this section disagree, follow `build.yml` and fix this.
+
+Run everything from the repo root, on an up-to-date `main`.
+
+```bash
+# 1. The describer commit to bake in. It must be on main.
+git ls-remote https://github.com/grahamlehr/describer.git refs/heads/main
+```
+
+```bash
+# 2. pi-gen at the pinned tag (PIGEN_TAG in build.yml). Once; pi-gen/ is gitignored.
+git clone --depth 1 --branch 2026-09-15-raspios-trixie-arm64 https://github.com/RPi-Distro/pi-gen.git pi-gen
+```
+
+```bash
+# 3. Our stage and config, fresh each time, and the commit from step 1.
+rm -rf pi-gen/stage-describer pi-gen/deploy
+cp -R stage-describer pi-gen/stage-describer
+touch pi-gen/stage2/SKIP_IMAGES
+cp config pi-gen/config
+echo "export DESCRIBER_REF=<full sha from step 1>" >> pi-gen/config
+```
+
+```bash
+# 4. Build. A container left by an interrupted build stops the next one, so remove it first.
+docker rm -v pigen_work 2>/dev/null; (cd pi-gen && ./build-docker.sh)
+```
+
+The build has worked when the log says `Describer stage done: <sha> on main` and
+`pi-gen/deploy/` holds one `image_<date>-describer.img.xz`.
+
+```bash
+# 5. Package it where Imager can find it. out/ is gitignored.
+mkdir -p out && mv pi-gen/deploy/image_*-describer.img.xz out/
+(cd out && shasum -a 256 image_*-describer.img.xz > "$(ls image_*-describer.img.xz).sha256")
+python3 scripts/os_list.py local out/image_*-describer.img.xz
+```
+
+Then flash it with the manifest, as in "Testing a build before it is published" below.
+
+### Checking first boot before flashing
+
+The stage's checks see the image as built. Raspberry Pi OS's first-boot user setup runs later and
+changes systemd state (cloud-init calls `/usr/lib/userconf-pi/userconf`, which ends in
+`/usr/bin/cancel-rename`), and two images that passed every file check failed there: one left the TV on
+a login prompt, the next asked for a username for ever. describer's `docs/traps.md` has both.
+
+So run that script against the image's own files before handing a card to anyone:
+
+1. Decompress the image and mount its second partition read-only in a `--privileged` Debian container
+   (start sector at byte 470 of the MBR; the Debian base image has no `xz`, so decompress on the host).
+2. Put a tmpfs overlay on it, empty `/etc/fstab`, and mask `describer.service` (so nothing polls an
+   upstream), the `cloud-*` services, `userconfig.service` and NetworkManager.
+3. Bind `/proc`, `/sys` and `/dev` into it and `exec chroot <root> /lib/systemd/systemd`. The container
+   needs `--cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw`.
+4. In it, run `/usr/lib/userconf-pi/userconf <name> "$(openssl passwd -6 <throwaway>)"`.
+
+It passes when `userconf` exits 0, `systemctl is-active kiosk` still says `activating` (it is waiting
+for the masked backend) and `getty@tty1` is `inactive`. This does not prove cage and Chromium on a TV,
+or that Imager's Wi-Fi settings apply. Only a flashed card does.
+
+A good first boot on the card: no username prompt, no failed cloud services, and the "Set up your
+departure board" screen with its QR code, still there after a reboot.
+
 ## Using it (Raspberry Pi Imager 2.x)
 
 Add the repository under **App Options → Content repository**:
 
 ```
-https://raw.githubusercontent.com/grahamlehr/describer-image/main/os_list.json
+https://raw.githubusercontent.com/grahamlehr/describer-image/imager/os_list.json
 ```
 
 then choose **Raspberry Pi 4** and **Describer**. **Always set the Wi-Fi, username and password in
 Imager's settings.** The image keeps pi-gen's defaults for the first user (as the official Lite image
-does) and relies on Imager to configure it through cloud-init.
+does) and relies on Imager to configure it through cloud-init. Any username will do except
+`describer`: the image already has a system user of that name, which the board runs as.
 
 **Do not pick the image with "Use custom".** Imager 2.x cannot know how a file it has been handed
 wants to be customised, so it assumes `init_format: none` and offers no Wi-Fi or user settings
